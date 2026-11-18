@@ -3,18 +3,31 @@
 # Strategy (long only, one asset CBBTC, 1-minute bars):
 #   Buy only the deepest oversold bounces, then take a quick profit.
 #   - RSI(14, Wilder's) crosses back above 30 (a recovery after being oversold),
-#   - the close is above the lower Bollinger Band (20 typical prices, 2 sigma),
-#   - and RSI dipped below 20 at some point in the last 15 bars (deep oversold).
+#   - the close is above the lower Bollinger Band (30 typical prices, 2 sigma),
+#   - and RSI dipped below 15 at some point in the last 15 bars (deep oversold).
 #   That last filter is the edge: shallow oversold signals fire constantly in a
 #   falling market and bleed fees; only the deep ones precede real bounces.
-#   Position: 75% of cash (keeps price impact low vs a full-size order).
+#   A 30-bar Bollinger (vs 20) smooths the band so the bounce is not rejected
+#   by a fast-falling lower band; deepening the filter to 15 drops the one
+#   marginal trade that lost money on the dev window.
+#   Position: 65% of cash (keeps price impact low vs a full-size order, and
+#   caps the loss on a flat trade to under $1 on the dev window).
 #   Exit the whole position when any of these holds at a bar's close:
-#   - value/cost >= 1.006  (take profit, about +0.6% over the fill),
-#   - value/cost <= 0.996  (stop loss, about -0.4% under the fill),
-#   - held for 20 bars (the bounce peaks around 10-20 bars, then fades),
-#   - RSI >= 75 (overbought).
-#   Max drawdown on the dev window is ~0.3%; it never holds through a
+#   - value/cost >= 1.0056 (take profit, about +0.6% over the fill),
+#   - value/cost <= 0.9956 (stop loss, about -0.4% under the fill),
+#   - held for 15 bars (the bounce peaks around 10-15 bars, then fades;
+#     holding to 20 only adds drift losses),
+#   - RSI >= 80 (overbought; the standard 80 level lets a strong bounce run
+#     a few bars longer than 75 did).
+#   Dev window (1,440 bars): net PnL +$8.99, 4 round trips, maxDD 0.19%,
+#   quarter split +$7.80 / $0.00 / +$2.07 / -$0.87. It never holds through a
 #   sustained decline, so it stays in cash while the market grinds down.
+#   Parameters chosen by grid search over the dev window (work/grid7*.py),
+#   kept on a plateau, not a spike: size 0.62-0.68 x hold 12-15 all pass.
+#   Rejected by the same search: ATR-based TP/SL (far too tight on 1-min
+#   bars), trailing exits (never fire), EMA9/EMA-cross entry filters (they
+#   kill the counter-trend bounce), size 1.0 (pumps Q1 but worst quarter
+#   -$2.20).
 #
 # Method adapted from the Agensi technical-scanner skill (EMA/RSI/MACD/Bollinger/
 # ATR/ADX regime method, applied here to 1-minute bars): use RSI + Bollinger
@@ -34,19 +47,19 @@ import makefun_bars
 SYMBOL = "CBBTC"
 
 RSI_BARS = 14
-BAND_BARS = 20
+BAND_BARS = 30
 BAND_SIGMAS = 2.0
 RSI_RECOVER = 30.0        # entry: RSI crosses back above this
-RSI_DEEP = 20.0
+RSI_DEEP = 15.0
 DEEP_LOOKBACK = 15        # bars to look back for the deep dip
-RSI_EXIT_ABOVE = 75.0     # exit: RSI overbought
+RSI_EXIT_ABOVE = 80.0     # exit: RSI overbought
 TAKE_PROFIT_NUM = 10056  # value/cost >= 1.0056, i.e. close/fill >= 1.006
 TAKE_PROFIT_DEN = 10000   # (cost carries the 4 bps buy fee, so the ratio
 STOP_LOSS_NUM = 9956      #  is 0.9996x the price ratio; these thresholds
 STOP_LOSS_DEN = 10000     #  reproduce a +0.6% TP / -0.4% SL on the fill)
-MAX_HOLD_BARS = 20
-SIZE_NUM = 3              # buy 3/4 of cash
-SIZE_DEN = 4
+MAX_HOLD_BARS = 15
+SIZE_NUM = 13             # buy 13/20 of cash (65%)
+SIZE_DEN = 20
 MAX_SLIPPAGE_BPS = 100
 
 
@@ -165,7 +178,7 @@ def on_batch(state, batch):
         return []
     if not any(x < RSI_DEEP for x in s.rsi_history):
         return []
-    # Buy 75% of cash, within the weight cap and the minimum notional.
+    # Buy 65% of cash, within the weight cap and the minimum notional.
     room = state.weight_room(SYMBOL)
     spend = state.cash * SIZE_NUM // SIZE_DEN
     if spend > room:
